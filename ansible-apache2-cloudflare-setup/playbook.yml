@@ -1,0 +1,202 @@
+---
+- name: Setup Apache2 and Cloudflare Tunnel on OCI Ubuntu Instance
+  hosts: oci_server
+  become: yes
+  vars:
+    website_repo: "https://github.com/Anamelechi/Home-Server-Hosting-Solution-With-Cloudflare-Tunnel.git"
+    tunnel_name: "oci-tunnel"
+    tunnel_id: "c811c3bc-1694-4a0c-a626-efb8169d5451"
+    apache_port: 80
+    
+  tasks:
+    # Update system packages
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+        autoremove: yes
+
+    # Install required packages
+    - name: Install Apache2 and dependencies
+      apt:
+        name:
+          - apache2
+          - git
+          - curl
+          - wget
+          - unzip
+        state: present
+
+    # Configure Apache2
+    - name: Enable Apache2 service
+      systemd:
+        name: apache2
+        enabled: yes
+        state: started
+
+    - name: Configure Apache2 to listen on port 80
+      lineinfile:
+        path: /etc/apache2/ports.conf
+        regexp: '^Listen 80'
+        line: 'Listen 80'
+        backup: yes
+
+    # Setup website
+    - name: Remove default Apache2 index page
+      file:
+        path: /var/www/html/index.html
+        state: absent
+
+    - name: Clone website repository
+      git:
+        repo: "{{ website_repo }}"
+        dest: /tmp/website-repo
+        force: yes
+
+    - name: Copy website files to Apache document root
+      copy:
+        src: /tmp/website-repo/website/
+        dest: /var/www/html/
+        remote_src: yes
+        owner: www-data
+        group: www-data
+        mode: '0644'
+
+    - name: Set proper permissions for web directory
+      file:
+        path: /var/www/html
+        owner: www-data
+        group: www-data
+        recurse: yes
+
+    - name: Enable Apache2 modules
+      apache2_module:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - rewrite
+        - ssl
+        - headers
+      notify: restart apache2
+
+    - name: Test Apache2 configuration
+      command: apache2ctl configtest
+      register: apache_config_test
+      changed_when: false
+
+    - name: Display Apache2 config test result
+      debug:
+        var: apache_config_test.stdout_lines
+
+    # Install Cloudflared
+    - name: Add Cloudflare GPG key
+      apt_key:
+        url: https://pkg.cloudflare.com/cloudflare-main.gpg
+        state: present
+
+    - name: Add Cloudflare repository
+      apt_repository:
+        repo: "deb https://pkg.cloudflare.com/cloudflared {{ ansible_distribution_release }} main"
+        state: present
+        update_cache: yes
+
+    - name: Install cloudflared
+      apt:
+        name: cloudflared
+        state: present
+
+    # Prepare Cloudflare tunnel configuration
+    - name: Create cloudflared config directory
+      file:
+        path: /etc/cloudflared
+        state: directory
+        mode: '0755'
+
+    - name: Create tunnel configuration file
+      copy:
+        content: |
+          tunnel: {{ tunnel_id }}
+          credentials-file: /etc/cloudflared/{{ tunnel_id }}.json
+          
+          ingress:
+            - hostname: "*.your-domain.com"  # Replace with your actual domain
+              service: http://localhost:{{ apache_port }}
+            - service: http_status:404
+        dest: /etc/cloudflared/config.yml
+        mode: '0644'
+        backup: yes
+
+    - name: Create systemd service for cloudflared tunnel
+      copy:
+        content: |
+          [Unit]
+          Description=Cloudflare Tunnel
+          After=network.target
+
+          [Service]
+          TimeoutStartSec=0
+          Type=notify
+          ExecStart=/usr/bin/cloudflared tunnel --config /etc/cloudflared/config.yml run
+          Restart=on-failure
+          RestartSec=5s
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/cloudflared.service
+        mode: '0644'
+      notify: reload systemd
+
+    - name: Clean up temporary files
+      file:
+        path: /tmp/website-repo
+        state: absent
+
+    # Display next steps
+    - name: Display manual configuration steps
+      debug:
+        msg: |
+          ==========================================
+          MANUAL STEPS REQUIRED:
+          ==========================================
+          
+          1. Authenticate with Cloudflare:
+             sudo cloudflared tunnel login
+          
+          2. Create credentials file for your tunnel:
+             This should create: /root/.cloudflared/{{ tunnel_id }}.json
+          
+          3. Copy the credentials file to the proper location:
+             sudo cp /root/.cloudflared/{{ tunnel_id }}.json /etc/cloudflared/
+          
+          4. Update the hostname in /etc/cloudflared/config.yml:
+             - Replace "*.anamelechi.com" with your actual domain
+          
+          5. Test the tunnel configuration:
+             sudo cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate
+          
+          6. Enable and start the cloudflared service:
+             sudo systemctl daemon-reload
+             sudo systemctl enable cloudflared
+             sudo systemctl start cloudflared
+          
+          7. Check service status:
+             sudo systemctl status cloudflared
+          
+          ==========================================
+          Your Apache2 server is running on port {{ apache_port }}
+          Website files have been deployed from the GitHub repository
+          ==========================================
+
+  handlers:
+    - name: restart apache2
+      systemd:
+        name: apache2
+        state: restarted
+
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes

@@ -1,0 +1,94 @@
+name: Deploy Website to OCI Ubuntu
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: HTML Validation
+        run: |
+          npm install -g htmlhint
+          htmlhint website/**/*.html
+      
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      
+      - name: Add server to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+      
+      - name: Test SSH Connection
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "echo 'SSH Connection successful!' && whoami && pwd"
+      
+      - name: Check Apache2 status
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "sudo systemctl is-active apache2 || echo 'Apache2 not running'"
+      
+      - name: Backup existing website (optional)
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "sudo cp -r /var/www/html /var/www/html.backup.$(date +%Y%m%d_%H%M%S) 2>/dev/null || echo 'No backup needed'"
+      
+      - name: Clean Apache document root
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "sudo rm -rf /var/www/html/* && sudo mkdir -p /var/www/html"
+      
+      - name: Deploy website files
+        run: |
+          rsync -avz --delete \
+            -e "ssh -o StrictHostKeyChecking=no" \
+            ./website/ \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/tmp/website-deploy/
+      
+      - name: Move files and set permissions
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "sudo cp -r /tmp/website-deploy/* /var/www/html/ && \
+             sudo chown -R www-data:www-data /var/www/html && \
+             sudo chmod -R 644 /var/www/html && \
+             sudo find /var/www/html -type d -exec chmod 755 {} \; && \
+             sudo rm -rf /tmp/website-deploy"
+      
+      - name: Test Apache configuration
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "sudo apache2ctl configtest"
+      
+      - name: Reload Apache2
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "sudo systemctl reload apache2"
+      
+      - name: Verify deployment
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "curl -s -o /dev/null -w '%{http_code}' http://localhost || echo 'Local test failed'"
+      
+      - name: Display deployment info
+        run: |
+          echo "✅ Deployment completed successfully!"
+          echo "🌐 Website deployed to Apache2 document root: /var/www/html"
+          echo "🔗 Access via: http://${{ secrets.SSH_HOST }}"
+          echo "📁 Files deployed from: ./website/"
