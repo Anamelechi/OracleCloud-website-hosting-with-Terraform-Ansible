@@ -7,7 +7,8 @@
 .terraform.lock.hcl
 terraform.tfplan
 terraform.tfplan.json
-.env-vars.sh
+env-vars.sh
+tfplan
 
 # Crash log files
 crash.log
