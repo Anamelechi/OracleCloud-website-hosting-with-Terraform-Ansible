@@ -52,3 +52,4 @@ Thumbs.db
 *_rsa
 *_rsa.pub
 oci_key*
+env-vars.sh
