@@ -115,4 +115,4 @@ trap cleanup EXIT
 
 # Run main function
 main "$@"
-/mnt/c/Users/philz/Desktop/oci-key
+/path/to/key/
