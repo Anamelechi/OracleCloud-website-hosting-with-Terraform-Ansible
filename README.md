@@ -361,7 +361,6 @@ sudo cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate
 # Check service logs
 sudo journalctl -u cloudflared -f
 ```
-```markdown
 #### 🛡️ Apache Service Issues  
 **Problem**: Website not accessible  
 **Solutions**:  
